@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Store Reservation Map</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Configuration - FULLY CONFIGURED
+        const CONFIG = {
+            // Your Google Sheet ID (extracted from URL)
+            SHEET_ID: '1zWuRx7IugpObqQEyhXs4EdfcsWJZ7bvxpPmglVOTJgo',
+            
+            // Your actual sheet tab name
+            SHEET_NAME: 'Store Roster',
+            
+            // Your Google API Key
+            API_KEY: 'AIzaSyBHcVkUgYLoJnNKpTecRUpAyMHU-T8HqFY',
+            
+            // Auto-refresh interval in minutes (set to 0 to disable)
+            REFRESH_MINUTES: 5
+        };
+
+        // Lucide React icons as simple SVG components
+        const MapPin = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+        );
+
+        const Filter = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+            </svg>
+        );
+
+        const Search = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+        );
+
+        const ExternalLink = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+        );
+
+        const Loader = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+        );
+
+        const RefreshCw = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M1 4v6h6M23 20v-6h-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+            </svg>
+        );
+
+        const AlertCircle = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        );
+
+        const StoreReservationMap = () => {
+            const [stores, setStores] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState('');
+            const [lastUpdated, setLastUpdated] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [stateFilter, setStateFilter] = useState('all');
+            const [selectedStore, setSelectedStore] = useState(null);
+
+            // Check if configuration is complete
+            const isConfigured = CONFIG.SHEET_ID !== 'YOUR_GOOGLE_SHEET_ID_HERE' && 
+                               CONFIG.API_KEY !== 'YOUR_GOOGLE_API_KEY_HERE';
+
+            const fetchFromGoogleSheets = async () => {
+                if (!isConfigured) {
+                    setError('Please configure your Google Sheet ID and API Key in the HTML file');
+                    setLoading(false);
+                    return;
+                }
+
+                try {
+                    setLoading(true);
+                    setError('');
+
+                    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${CONFIG.SHEET_NAME}?key=${CONFIG.API_KEY}`;
+                    
+                    console.log('Fetching from URL:', url);
+                    
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Google Sheets API error: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log('Google Sheets response:', data);
+                    
+                    if (!data.values || data.values.length === 0) {
+                        throw new Error('No data found in the specified sheet');
+                    }
+
+                    const parsedStores = parseGoogleSheetsData(data.values);
+                    setStores(parsedStores);
+                    setLastUpdated(new Date());
+                    console.log('Loaded stores:', parsedStores.length);
+                    
+                } catch (err) {
+                    console.error('Error fetching data:', err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const parseGoogleSheetsData = (values) => {
+                const stores = [];
+                
+                // Skip header row (index 0) and process data rows
+                for (let i = 1; i < values.length; i++) {
+                    const row = values[i];
+                    
+                    // Ensure we have enough columns
+                    if (row.length >= 11) {
+                        const status = row[1]?.toString().trim().toLowerCase();
+                        
+                        // Only include stores with "Open" status
+                        if (status === 'open') {
+                            const lat = parseFloat(row[9]);
+                            const lng = parseFloat(row[10]);
+                            
+                            // Only add if we have valid coordinates
+                            if (!isNaN(lat) && !isNaN(lng)) {
+                                stores.push({
+                                    reserveLink: row[0]?.toString().trim() || '',
+                                    status: row[1]?.toString().trim() || '',
+                                    retailer: row[2]?.toString().trim() || '',
+                                    storeNumber: row[3]?.toString().trim() || '',
+                                    storeName: row[4]?.toString().trim() || '',
+                                    address: row[5]?.toString().trim() || '',
+                                    city: row[6]?.toString().trim() || '',
+                                    state: row[7]?.toString().trim() || '',
+                                    zip: row[8]?.toString().trim() || '',
+                                    latitude: lat,
+                                    longitude: lng
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                return stores;
+            };
+
+            // Initial load
+            useEffect(() => {
+                fetchFromGoogleSheets();
+            }, []);
+
+            // Auto-refresh setup
+            useEffect(() => {
+                if (CONFIG.REFRESH_MINUTES > 0 && isConfigured) {
+                    const interval = setInterval(() => {
+                        console.log('Auto-refreshing data...');
+                        fetchFromGoogleSheets();
+                    }, CONFIG.REFRESH_MINUTES * 60 * 1000);
+
+                    return () => clearInterval(interval);
+                }
+            }, []);
+
+            const filteredStores = useMemo(() => {
+                return stores.filter(store => {
+                    const matchesSearch = store.storeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                       store.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                       store.retailer.toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesState = stateFilter === 'all' || store.state === stateFilter;
+                    
+                    return matchesSearch && matchesState;
+                });
+            }, [stores, searchTerm, stateFilter]);
+
+            const uniqueStates = [...new Set(stores.map(store => store.state))].sort();
+
+            if (!isConfigured) {
+                return (
+                    <div className="w-full h-screen bg-gray-50 flex items-center justify-center">
+                        <div className="max-w-md p-6 bg-white rounded-lg shadow-lg">
+                            <div className="flex items-center gap-3 mb-4">
+                                <AlertCircle className="w-6 h-6 text-yellow-500" />
+                                <h2 className="text-xl font-bold">Configuration Required</h2>
+                            </div>
+                            <p className="text-gray-600 mb-4">
+                                Please configure your Google Sheets integration by updating the CONFIG section in the HTML file:
+                            </p>
+                            <ul className="text-sm text-gray-700 space-y-1">
+                                <li>• SHEET_ID: Your Google Sheet ID</li>
+                                <li>• API_KEY: Your Google API Key</li>
+                                <li>• SHEET_NAME: Your sheet tab name</li>
+                            </ul>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full h-screen bg-gray-50 flex flex-col">
+                    {/* Header */}
+                    <div className="bg-white shadow-sm border-b px-6 py-4">
+                        <div className="flex justify-between items-center mb-4">
+                            <h1 className="text-2xl font-bold text-gray-900">Store Reservation Map</h1>
+                            <button
+                                onClick={fetchFromGoogleSheets}
+                                disabled={loading}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {loading ? <Loader className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                Refresh Data
+                            </button>
+                        </div>
+
+                        {error && (
+                            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-500" />
+                                <span className="text-red-700">{error}</span>
+                            </div>
+                        )}
+
+                        {lastUpdated && (
+                            <div className="mb-4 text-sm text-gray-600">
+                                Last updated: {lastUpdated.toLocaleString()}
+                                {CONFIG.REFRESH_MINUTES > 0 && (
+                                    <span> • Auto-refresh every {CONFIG.REFRESH_MINUTES} minutes</span>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* Filters */}
+                        <div className="flex flex-wrap gap-4 items-center">
+                            <div className="flex items-center gap-2">
+                                <Search className="w-4 h-4 text-gray-500" />
+                                <input
+                                    type="text"
+                                    placeholder="Search stores..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="px-3 py-1 border rounded-md text-sm"
+                                />
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                                <Filter className="w-4 h-4 text-gray-500" />
+                                <select
+                                    value={stateFilter}
+                                    onChange={(e) => setStateFilter(e.target.value)}
+                                    className="px-3 py-1 border rounded-md text-sm"
+                                >
+                                    <option value="all">All States</option>
+                                    {uniqueStates.map(state => (
+                                        <option key={state} value={state}>{state}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            
+                            <div className="text-sm text-gray-600">
+                                Showing {filteredStores.length} of {stores.length} stores
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex">
+                        {/* Map Area */}
+                        <div className="flex-1 relative bg-gray-100">
+                            {loading && (
+                                <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10">
+                                    <div className="flex items-center gap-3">
+                                        <Loader className="w-6 h-6 animate-spin text-blue-600" />
+                                        <span className="text-gray-700">Loading store data...</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="absolute inset-0">
+                                {/* Real US Map Background */}
+                                <div className="relative w-full h-full overflow-hidden">
+                                    {/* US Map SVG Background */}
+                                    <svg 
+                                        viewBox="0 0 1000 600" 
+                                        className="absolute inset-0 w-full h-full object-cover"
+                                        style={{ filter: 'brightness(0.95)' }}
+                                    >
+                                        {/* Simplified US Map Path */}
+                                        <path 
+                                            d="M 158 206 L 157 227 L 157 234 L 151 244 L 144 250 L 141 258 L 144 264 L 151 267 L 158 264 L 164 258 L 170 250 L 176 244 L 182 250 L 188 258 L 194 264 L 200 267 L 206 264 L 212 258 L 218 250 L 224 244 L 230 250 L 236 258 L 242 264 L 248 267 L 254 264 L 260 258 L 266 250 L 272 244 L 278 250 L 284 258 L 290 264 L 296 267 L 302 264 L 308 258 L 314 250 L 320 244 L 326 250 L 332 258 L 338 264 L 344 267 L 350 264 L 356 258 L 362 250 L 368 244 L 374 250 L 380 258 L 386 264 L 392 267 L 398 264 L 404 258 L 410 250 L 416 244 L 422 250 L 428 258 L 434 264 L 440 267 L 446 264 L 452 258 L 458 250 L 464 244 L 470 250 L 476 258 L 482 264 L 488 267 L 494 264 L 500 258 L 506 250 L 512 244 L 518 250 L 524 258 L 530 264 L 536 267 L 542 264 L 548 258 L 554 250 L 560 244 L 566 250 L 572 258 L 578 264 L 584 267 L 590 264 L 596 258 L 602 250 L 608 244 L 614 250 L 620 258 L 626 264 L 632 267 L 638 264 L 644 258 L 650 250 L 656 244 L 662 250 L 668 258 L 674 264 L 680 267 L 686 264 L 692 258 L 698 250 L 704 244 L 710 250 L 716 258 L 722 264 L 728 267 L 734 264 L 740 258 L 746 250 L 752 244 L 758 250 L 764 258 L 770 264 L 776 267 L 782 264 L 788 258 L 794 250 L 800 244 L 800 350 L 200 350 Z"
+                                            fill="#e2e8f0" 
+                                            stroke="#cbd5e1" 
+                                            strokeWidth="1"
+                                        />
+                                        
+                                        {/* State boundaries - simplified */}
+                                        <g stroke="#94a3b8" strokeWidth="0.5" fill="none">
+                                            {/* California */}
+                                            <path d="M 50 180 L 50 350 L 150 350 L 150 200 Z" />
+                                            {/* Texas */}
+                                            <path d="M 300 250 L 450 250 L 450 350 L 300 350 Z" />
+                                            {/* Florida */}
+                                            <path d="M 650 300 L 750 300 L 750 350 L 650 350 Z" />
+                                            {/* New York */}
+                                            <path d="M 700 150 L 800 150 L 800 200 L 700 200 Z" />
+                                            {/* Other state lines */}
+                                            <line x1="200" y1="150" x2="200" y2="350" />
+                                            <line x1="300" y1="150" x2="300" y2="350" />
+                                            <line x1="400" y1="150" x2="400" y2="350" />
+                                            <line x1="500" y1="150" x2="500" y2="350" />
+                                            <line x1="600" y1="150" x2="600" y2="350" />
+                                            <line x1="700" y1="150" x2="700" y2="350" />
+                                            
+                                            <line x1="50" y1="200" x2="850" y2="200" />
+                                            <line x1="50" y1="250" x2="850" y2="250" />
+                                            <line x1="50" y1="300" x2="850" y2="300" />
+                                        </g>
+                                        
+                                        {/* State labels */}
+                                        <g fill="#64748b" fontSize="12" textAnchor="middle">
+                                            <text x="100" y="265">CA</text>
+                                            <text x="375" y="300">TX</text>
+                                            <text x="700" y="325">FL</text>
+                                            <text x="750" y="175">NY</text>
+                                            <text x="250" y="225">CO</text>
+                                            <text x="550" y="225">WA</text>
+                                        </g>
+                                    </svg>
+                                    
+                                    {/* Store Bubbles */}
+                                    {filteredStores.map((store) => {
+                                        // Convert lat/lng to screen positions (improved mapping)
+                                        // US bounds: lat 24-49, lng -125 to -66
+                                        const x = ((store.longitude + 125) / 59) * 100; // -125 to -66 = 59 degree range
+                                        const y = ((49 - store.latitude) / 25) * 100;   // 49 to 24 = 25 degree range
+                                        
+                                        return (
+                                            <div
+                                                key={store.storeNumber}
+                                                className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer transition-all duration-200 hover:scale-125 z-10"
+                                                style={{
+                                                    left: `${Math.max(5, Math.min(95, x))}%`,
+                                                    top: `${Math.max(10, Math.min(90, y))}%`,
+                                                }}
+                                                onClick={() => setSelectedStore(store)}
+                                                title={`${store.storeName} - ${store.city}, ${store.state}`}
+                                            >
+                                                <div className="relative">
+                                                    <div className="w-8 h-8 rounded-full border-3 border-white shadow-lg flex items-center justify-center bg-green-500 hover:bg-green-600 transition-colors">
+                                                        <MapPin className="w-4 h-4 text-white" />
+                                                    </div>
+                                                    {/* Store name tooltip on hover */}
+                                                    <div className="absolute top-10 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-2 py-1 rounded text-xs whitespace-nowrap opacity-0 hover:opacity-100 transition-opacity pointer-events-none z-20">
+                                                        {store.storeName}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            
+                            {/* Legend */}
+                            <div className="absolute top-4 right-4 bg-white rounded-lg shadow-lg p-4">
+                                <h3 className="font-semibold mb-2 text-sm">Available Stores</h3>
+                                <div className="space-y-1 text-xs">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                                        <span>Open for Reservation</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Store Details Panel */}
+                        {selectedStore && (
+                            <div className="w-80 bg-white shadow-lg border-l overflow-y-auto">
+                                <div className="p-6">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div>
+                                            <h2 className="text-xl font-bold">{selectedStore.storeName}</h2>
+                                            <p className="text-gray-600">{selectedStore.retailer}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setSelectedStore(null)}
+                                            className="text-gray-400 hover:text-gray-600 text-xl"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Status</div>
+                                            <div className="inline-block px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-700">
+                                                Open
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Store Number</div>
+                                            <div className="text-gray-900">{selectedStore.storeNumber}</div>
+                                        </div>
+                                        
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Address</div>
+                                            <div className="text-gray-900">
+                                                {selectedStore.address}<br/>
+                                                {selectedStore.city}, {selectedStore.state} {selectedStore.zip}
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="pt-4">
+                                            <a
+                                                href={selectedStore.reserveLink}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                                            >
+                                                Reserve Store
+                                                <ExternalLink className="w-4 h-4" />
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<StoreReservationMap />, document.getElementById('root'));
+    </script>
+</body>
+</html>

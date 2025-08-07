@@ -8,15 +8,18 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Maps JavaScript API -->
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBHcVkUgYLoJnNKpTecRUpAyMHU-T8HqFY&callback=initMap"></script>
     <style>
         body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+        #map { height: 100%; width: 100%; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
         // Configuration - FULLY CONFIGURED
         const CONFIG = {
@@ -26,12 +29,488 @@
             // Your actual sheet tab name
             SHEET_NAME: 'Store Roster',
             
-            // Your Google API Key
+            // Your Google API Key (for Sheets)
             API_KEY: 'AIzaSyBHcVkUgYLoJnNKpTecRUpAyMHU-T8HqFY',
+            
+            // Google Maps API Key (same as above)
+            MAPS_API_KEY: 'AIzaSyBHcVkUgYLoJnNKpTecRUpAyMHU-T8HqFY',
             
             // Auto-refresh interval in minutes (set to 0 to disable)
             REFRESH_MINUTES: 5
         };
+
+        // Global variables for Google Maps
+        let map = null;
+        let markers = [];
+
+        // Lucide React icons as simple SVG components
+        const Filter = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+            </svg>
+        );
+
+        const Search = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+        );
+
+        const ExternalLink = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+        );
+
+        const Loader = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+        );
+
+        const RefreshCw = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M1 4v6h6M23 20v-6h-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+            </svg>
+        );
+
+        const AlertCircle = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        );
+
+        // Initialize Google Map
+        window.initMap = function() {
+            console.log('Google Maps API loaded');
+        };
+
+        const StoreReservationMap = () => {
+            const [stores, setStores] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState('');
+            const [lastUpdated, setLastUpdated] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [stateFilter, setStateFilter] = useState('all');
+            const [selectedStore, setSelectedStore] = useState(null);
+            const mapRef = useRef(null);
+            const [mapLoaded, setMapLoaded] = useState(false);
+
+            // Check if configuration is complete
+            const isConfigured = CONFIG.SHEET_ID !== 'YOUR_GOOGLE_SHEET_ID_HERE' && 
+                               CONFIG.API_KEY !== 'YOUR_GOOGLE_API_KEY_HERE';
+
+            const isMapsConfigured = CONFIG.MAPS_API_KEY !== 'YOUR_GOOGLE_MAPS_API_KEY';
+
+            const initializeMap = () => {
+                if (!window.google || !mapRef.current) return;
+
+                // Create map centered on US
+                map = new window.google.maps.Map(mapRef.current, {
+                    zoom: 4,
+                    center: { lat: 39.8283, lng: -98.5795 }, // Center of US
+                    mapTypeId: 'roadmap',
+                    styles: [
+                        {
+                            featureType: 'poi',
+                            elementType: 'labels',
+                            stylers: [{ visibility: 'off' }]
+                        }
+                    ]
+                });
+
+                setMapLoaded(true);
+                console.log('Google Map initialized');
+            };
+
+            const addMarkersToMap = (storeData) => {
+                if (!map || !window.google) return;
+
+                // Clear existing markers
+                markers.forEach(marker => marker.setMap(null));
+                markers = [];
+
+                // Add new markers
+                storeData.forEach(store => {
+                    const marker = new window.google.maps.Marker({
+                        position: { lat: store.latitude, lng: store.longitude },
+                        map: map,
+                        title: store.storeName,
+                        icon: {
+                            path: window.google.maps.SymbolPath.CIRCLE,
+                            fillColor: '#10B981',
+                            fillOpacity: 1,
+                            strokeColor: '#ffffff',
+                            strokeWeight: 2,
+                            scale: 8
+                        }
+                    });
+
+                    const infoWindow = new window.google.maps.InfoWindow({
+                        content: `
+                            <div style="padding: 8px; min-width: 200px;">
+                                <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: bold;">${store.storeName}</h3>
+                                <p style="margin: 0 0 4px 0; color: #666;">${store.retailer}</p>
+                                <p style="margin: 0 0 4px 0; font-size: 14px;">${store.address}</p>
+                                <p style="margin: 0 0 8px 0; font-size: 14px;">${store.city}, ${store.state} ${store.zip}</p>
+                                <p style="margin: 0 0 8px 0;">
+                                    <span style="background: #D1FAE5; color: #065F46; padding: 2px 8px; border-radius: 12px; font-size: 12px;">Open</span>
+                                </p>
+                                <a href="${store.reserveLink}" target="_blank" 
+                                   style="display: inline-block; background: #2563EB; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 14px;">
+                                   Reserve Store
+                                </a>
+                            </div>
+                        `
+                    });
+
+                    marker.addListener('click', () => {
+                        // Close any open info windows
+                        markers.forEach(m => m.infoWindow && m.infoWindow.close());
+                        
+                        // Open this info window
+                        infoWindow.open(map, marker);
+                        marker.infoWindow = infoWindow;
+                        
+                        // Also update the side panel
+                        setSelectedStore(store);
+                    });
+
+                    markers.push(marker);
+                });
+
+                // Fit map to show all markers
+                if (markers.length > 0) {
+                    const bounds = new window.google.maps.LatLngBounds();
+                    markers.forEach(marker => bounds.extend(marker.getPosition()));
+                    map.fitBounds(bounds);
+                    
+                    // Ensure we don't zoom in too much
+                    const listener = window.google.maps.event.addListener(map, 'idle', function() {
+                        if (map.getZoom() > 10) map.setZoom(10);
+                        window.google.maps.event.removeListener(listener);
+                    });
+                }
+            };
+
+            const fetchFromGoogleSheets = async () => {
+                if (!isConfigured) {
+                    setError('Please configure your Google Sheet ID and API Key in the HTML file');
+                    setLoading(false);
+                    return;
+                }
+
+                try {
+                    setLoading(true);
+                    setError('');
+
+                    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SHEET_ID}/values/${CONFIG.SHEET_NAME}?key=${CONFIG.API_KEY}`;
+                    
+                    console.log('Fetching from URL:', url);
+                    
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Google Sheets API error: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log('Google Sheets response:', data);
+                    
+                    if (!data.values || data.values.length === 0) {
+                        throw new Error('No data found in the specified sheet');
+                    }
+
+                    const parsedStores = parseGoogleSheetsData(data.values);
+                    setStores(parsedStores);
+                    setLastUpdated(new Date());
+                    console.log('Loaded stores:', parsedStores.length);
+
+                    // Add markers to map if map is loaded
+                    if (mapLoaded) {
+                        addMarkersToMap(parsedStores);
+                    }
+                    
+                } catch (err) {
+                    console.error('Error fetching data:', err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const parseGoogleSheetsData = (values) => {
+                const stores = [];
+                
+                // Skip header row (index 0) and process data rows
+                for (let i = 1; i < values.length; i++) {
+                    const row = values[i];
+                    
+                    // Ensure we have enough columns
+                    if (row.length >= 11) {
+                        const status = row[1]?.toString().trim().toLowerCase();
+                        
+                        // Only include stores with "Open" status
+                        if (status === 'open') {
+                            const lat = parseFloat(row[9]);
+                            const lng = parseFloat(row[10]);
+                            
+                            // Only add if we have valid coordinates
+                            if (!isNaN(lat) && !isNaN(lng)) {
+                                stores.push({
+                                    reserveLink: row[0]?.toString().trim() || '',
+                                    status: row[1]?.toString().trim() || '',
+                                    retailer: row[2]?.toString().trim() || '',
+                                    storeNumber: row[3]?.toString().trim() || '',
+                                    storeName: row[4]?.toString().trim() || '',
+                                    address: row[5]?.toString().trim() || '',
+                                    city: row[6]?.toString().trim() || '',
+                                    state: row[7]?.toString().trim() || '',
+                                    zip: row[8]?.toString().trim() || '',
+                                    latitude: lat,
+                                    longitude: lng
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                return stores;
+            };
+
+            // Initialize map when Google Maps API loads
+            useEffect(() => {
+                const checkGoogleMaps = () => {
+                    if (window.google && window.google.maps) {
+                        initializeMap();
+                    } else {
+                        setTimeout(checkGoogleMaps, 100);
+                    }
+                };
+                checkGoogleMaps();
+            }, []);
+
+            // Update markers when stores change
+            useEffect(() => {
+                if (mapLoaded && stores.length > 0) {
+                    addMarkersToMap(filteredStores);
+                }
+            }, [stores, filteredStores, mapLoaded]);
+
+            // Initial load
+            useEffect(() => {
+                fetchFromGoogleSheets();
+            }, []);
+
+            // Auto-refresh setup
+            useEffect(() => {
+                if (CONFIG.REFRESH_MINUTES > 0 && isConfigured) {
+                    const interval = setInterval(() => {
+                        console.log('Auto-refreshing data...');
+                        fetchFromGoogleSheets();
+                    }, CONFIG.REFRESH_MINUTES * 60 * 1000);
+
+                    return () => clearInterval(interval);
+                }
+            }, []);
+
+            const filteredStores = useMemo(() => {
+                return stores.filter(store => {
+                    const matchesSearch = store.storeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                       store.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                                       store.retailer.toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesState = stateFilter === 'all' || store.state === stateFilter;
+                    
+                    return matchesSearch && matchesState;
+                });
+            }, [stores, searchTerm, stateFilter]);
+
+            const uniqueStates = [...new Set(stores.map(store => store.state))].sort();
+
+            if (!isConfigured) {
+                return (
+                    <div className="w-full h-screen bg-gray-50 flex items-center justify-center">
+                        <div className="max-w-md p-6 bg-white rounded-lg shadow-lg">
+                            <div className="flex items-center gap-3 mb-4">
+                                <AlertCircle className="w-6 h-6 text-yellow-500" />
+                                <h2 className="text-xl font-bold">Configuration Required</h2>
+                            </div>
+                            <p className="text-gray-600 mb-4">
+                                Please configure your Google integration by updating the CONFIG section in the HTML file:
+                            </p>
+                            <ul className="text-sm text-gray-700 space-y-1">
+                                <li>• SHEET_ID: Your Google Sheet ID</li>
+                                <li>• API_KEY: Your Google Sheets API Key</li>
+                                <li>• MAPS_API_KEY: Your Google Maps API Key</li>
+                                <li>• SHEET_NAME: Your sheet tab name</li>
+                            </ul>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!isMapsConfigured) {
+                return (
+                    <div className="w-full h-screen bg-gray-50 flex items-center justify-center">
+                        <div className="max-w-md p-6 bg-white rounded-lg shadow-lg">
+                            <div className="flex items-center gap-3 mb-4">
+                                <AlertCircle className="w-6 h-6 text-yellow-500" />
+                                <h2 className="text-xl font-bold">Google Maps API Key Required</h2>
+                            </div>
+                            <p className="text-gray-600 mb-4">
+                                Please add your Google Maps API Key to the CONFIG section to enable the interactive map.
+                            </p>
+                            <p className="text-sm text-gray-600">
+                                You can get a Google Maps API Key from the Google Cloud Console.
+                            </p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full h-screen bg-gray-50 flex flex-col">
+                    {/* Header */}
+                    <div className="bg-white shadow-sm border-b px-6 py-4">
+                        <div className="flex justify-between items-center mb-4">
+                            <h1 className="text-2xl font-bold text-gray-900">Store Reservation Map</h1>
+                            <button
+                                onClick={fetchFromGoogleSheets}
+                                disabled={loading}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {loading ? <Loader className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                Refresh Data
+                            </button>
+                        </div>
+
+                        {error && (
+                            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-500" />
+                                <span className="text-red-700">{error}</span>
+                            </div>
+                        )}
+
+                        {lastUpdated && (
+                            <div className="mb-4 text-sm text-gray-600">
+                                Last updated: {lastUpdated.toLocaleString()}
+                                {CONFIG.REFRESH_MINUTES > 0 && (
+                                    <span> • Auto-refresh every {CONFIG.REFRESH_MINUTES} minutes</span>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* Filters */}
+                        <div className="flex flex-wrap gap-4 items-center">
+                            <div className="flex items-center gap-2">
+                                <Search className="w-4 h-4 text-gray-500" />
+                                <input
+                                    type="text"
+                                    placeholder="Search stores..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="px-3 py-1 border rounded-md text-sm"
+                                />
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                                <Filter className="w-4 h-4 text-gray-500" />
+                                <select
+                                    value={stateFilter}
+                                    onChange={(e) => setStateFilter(e.target.value)}
+                                    className="px-3 py-1 border rounded-md text-sm"
+                                >
+                                    <option value="all">All States</option>
+                                    {uniqueStates.map(state => (
+                                        <option key={state} value={state}>{state}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            
+                            <div className="text-sm text-gray-600">
+                                Showing {filteredStores.length} of {stores.length} stores
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex">
+                        {/* Google Map */}
+                        <div className="flex-1 relative">
+                            <div ref={mapRef} id="map" className="w-full h-full"></div>
+                            
+                            {loading && (
+                                <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10">
+                                    <div className="flex items-center gap-3">
+                                        <Loader className="w-6 h-6 animate-spin text-blue-600" />
+                                        <span className="text-gray-700">Loading store data...</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Store Details Panel */}
+                        {selectedStore && (
+                            <div className="w-80 bg-white shadow-lg border-l overflow-y-auto">
+                                <div className="p-6">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div>
+                                            <h2 className="text-xl font-bold">{selectedStore.storeName}</h2>
+                                            <p className="text-gray-600">{selectedStore.retailer}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setSelectedStore(null)}
+                                            className="text-gray-400 hover:text-gray-600 text-xl"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Status</div>
+                                            <div className="inline-block px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-700">
+                                                Open
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Store Number</div>
+                                            <div className="text-gray-900">{selectedStore.storeNumber}</div>
+                                        </div>
+                                        
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">Address</div>
+                                            <div className="text-gray-900">
+                                                {selectedStore.address}<br/>
+                                                {selectedStore.city}, {selectedStore.state} {selectedStore.zip}
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="pt-4">
+                                            <a
+                                                href={selectedStore.reserveLink}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                                            >
+                                                Reserve Store
+                                                <ExternalLink className="w-4 h-4" />
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<StoreReservationMap />, document.getElementById('root'));
+    </script>
+</body>
+</html>
 
         // Lucide React icons as simple SVG components
         const MapPin = ({ className }) => (
